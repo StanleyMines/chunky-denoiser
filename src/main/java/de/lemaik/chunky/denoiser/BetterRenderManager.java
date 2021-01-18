@@ -7,14 +7,15 @@ import se.llbit.chunky.renderer.RenderManager;
 import se.llbit.chunky.renderer.RenderMode;
 import se.llbit.chunky.renderer.RenderStatusListener;
 import se.llbit.chunky.renderer.scene.PathTracer;
+import se.llbit.chunky.renderer.scene.SampleBuffer;
 import se.llbit.chunky.renderer.scene.Scene;
 import se.llbit.chunky.resources.BitmapImage;
 import se.llbit.log.Log;
+import se.llbit.pfm.PfmFileWriter;
 import se.llbit.png.PngFileWriter;
 import se.llbit.util.TaskTracker;
 
 import java.io.*;
-import java.nio.ByteOrder;
 
 public class BetterRenderManager extends RenderManager {
     public static int ALBEDO_SPP = 16;
@@ -56,14 +57,14 @@ public class BetterRenderManager extends RenderManager {
                         }
                     } else if (rayTracer.getRayTracer() instanceof AlbedoTracer) {
                         try (OutputStream out = new BufferedOutputStream(context.getSceneFileOutputStream(scene.name + ".albedo.pfm"))) {
-                            writePfmImage(out, false);
+                            new PfmFileWriter(out).write(scene, TaskTracker.Task.NONE);
                         } catch (IOException e) {
                             Log.error("Saving the albedo PFM failed", e);
                         }
                         renderImage(oldTargetSpp);
                     } else if (rayTracer.getRayTracer() instanceof PathTracer) {
                         try (OutputStream out = new BufferedOutputStream(context.getSceneFileOutputStream(scene.name + ".pfm"))) {
-                          writePfmImage(out, true);
+                            new PfmFileWriter(out).write(scene, TaskTracker.Task.NONE);
                         } catch (IOException e) {
                           Log.error("Saving the render PFM failed", e);
                         }
@@ -80,7 +81,7 @@ public class BetterRenderManager extends RenderManager {
                                 );
                                 BitmapImage img = PortableFloatMap.readToRgbImage(new FileInputStream(denoisedPfm));
                                 try (PngFileWriter pngWriter = new PngFileWriter(new File(context.getSceneDirectory(), scene.name + "-" + spp + ".denoised.png"))) {
-                                    pngWriter.write(img.data, img.width, img.height, TaskTracker.Task.NONE);
+                                    pngWriter.write(img, img.width, img.height, TaskTracker.Task.NONE);
                                 }
                             } catch (IOException | InterruptedException e) {
                                 e.printStackTrace();
@@ -146,40 +147,35 @@ public class BetterRenderManager extends RenderManager {
         scene.startRender();
     }
 
-    private void writePfmImage(OutputStream out, boolean postProcess) throws IOException {
-        Scene scene = getBufferedScene();
-        double[] samples = scene.getSampleBuffer();
-        double[] pixels = new double[samples.length];
-
-        for (int y = 0; y < scene.height; y++) {
-            for (int x = 0; x < scene.width; x++) {
-                double[] result = new double[3];
-                if (postProcess) {
-                    scene.postProcessPixel(x, y, result);
-                } else {
-                    result[0] = samples[(y * scene.width + x) * 3 + 0];
-                    result[1] = samples[(y * scene.width + x) * 3 + 1];
-                    result[2] = samples[(y * scene.width + x) * 3 + 2];
-                }
-                pixels[(y * scene.width + x) * 3] = Math.min(1.0, result[0]);
-                pixels[(y * scene.width + x) * 3 + 1] = Math.min(1.0, result[1]);
-                pixels[(y * scene.width + x) * 3 + 2] = Math.min(1.0, result[2]);
-            }
-        }
-
-        PortableFloatMap.writeImage(pixels, scene.width, scene.height, ByteOrder.LITTLE_ENDIAN, out);
-    }
+//    private void writePfmImage(OutputStream out, boolean postProcess) throws IOException {
+//        Scene scene = getBufferedScene();
+//        SampleBuffer samples = scene.getSampleBuffer();
+//
+//        for (int y = 0; y < scene.height; y++) {
+//            for (int x = 0; x < scene.width; x++) {
+//                double[] result = new double[3];
+//                if (postProcess) {
+//                    scene.postProcessPixel(x, y, result);
+//                } else {
+//                    result[0] = samples.get(x, y, 0);
+//                    result[1] = samples.get(x, y, 1);
+//                    result[2] = samples.get(x, y, 2);
+//                }
+//                samples.setPixel(x,y,Math.min(1.0, result[0]),Math.min(1.0, result[1]),Math.min(1.0, result[2]));
+//            }
+//        }
+//        new PfmFileWriter(out).write(scene, TaskTracker.Task.NONE);
+//    }
 
     private void writeNormalPfmImage(OutputStream out) throws IOException {
         Scene scene = getBufferedScene();
-        double[] samples = scene.getSampleBuffer();
-        double[] pixels = NormalTracer.MAP_POSITIVE ? new double[samples.length] : samples;
+        SampleBuffer pixels = scene.getSampleBuffer();
         if (NormalTracer.MAP_POSITIVE) {
-            for (int i = 0; i < samples.length; i++) {
-                pixels[i] = Math.min(1.0, samples[i]) * 2 - 1;
-            }
+            pixels = new SampleBuffer(pixels);
+            for (long i = 0; i < pixels.sampleCount(); i++)
+                pixels.set(i, Math.min(1.0, pixels.get(i)) * 2 - 1);
         }
 
-        PortableFloatMap.writeImage(pixels, scene.width, scene.height, ByteOrder.LITTLE_ENDIAN, out);
+        new PfmFileWriter(out).write(scene, TaskTracker.Task.NONE);
     }
 }
